@@ -1,0 +1,33 @@
+[
+    {
+      "Query": {
+        "with": null,
+        "body": {
+          "Select": {
+            "distinct": false,
+            "top": null,
+            "projection": [
+            ],
+            "into": null,
+            "from": [
+            ],
+            "lateral_views": [],
+            "selection": {
+            },
+            "group_by": [],
+            "cluster_by": [],
+            "distribute_by": [],
+            "sort_by": [],
+            "having": null,
+            "qualify": null
+          }
+        },
+        "order_by": [
+        ],
+        "limit": null,
+        "offset": null,
+        "fetch": null,
+        "lock": null
+      }
+    }
+]  

@@ -1,4 +1,7 @@
 mod dialect;
+mod convert;
+
+pub use dialect::URLDialect;
 
 #[cfg(test)]
 mod tests {

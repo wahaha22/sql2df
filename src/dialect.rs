@@ -1,7 +1,7 @@
 use sqlparser::dialect::Dialect;
 
 #[derive(Debug, Default)]
-struct URLDialect;
+pub struct URLDialect;
 
 // 实现自己的 sql 方言, 使得支持 url
 impl Dialect for URLDialect {
@@ -13,7 +13,7 @@ impl Dialect for URLDialect {
 
     // URL 中可能包含的字符, 都认为是符号的一部分
     fn is_identifier_part(&self, ch: char) -> bool {
-        let res = ('a'..'z').contains(&ch)
+        let res = ('a'..='z').contains(&ch)
         || ('A'..='Z').contains(&ch)
         || ('0'..='9').contains(&ch)
         || [':', '/', '?', '&', '=', '-', '_', '.'].contains(&ch);
