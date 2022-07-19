@@ -3,27 +3,29 @@ use std::convert::TryFrom;
 use polars::prelude::*;
 use polars_lazy::dsl::Expr as polaExpr;
 use anyhow::{anyhow, Result};
-use sqlparser::ast::{Statement, Expr as SqlExpr, SetExpr, Select, Offset, TableWithJoins, OrderByExpr, SelectItem, TableFactor, Value as SqlValue, BinaryOperator as SqlBinaryOperator};
+use sqlparser::ast::{Statement, Expr as SqlExpr, SetExpr, Select, Offset, TableWithJoins, OrderByExpr,
+    SelectItem, TableFactor, Value as SqlValue, BinaryOperator as SqlBinaryOperator};
 
 // SQL 操作, SQL ast 可以参考 sql_parse.json 文件
 // 目前我们仅支持如下这些操作
-struct SQLOperation {
-    selection: Vec<SelectItem>,  // 列选择
-    condition: Option<SqlExpr>,  // 行过滤条件
-    source: Vec<TableWithJoins>, // 数据源
-    order_by: Vec<OrderByExpr>,
-    offset: Option<Offset>,
-    limit: Option<SqlExpr>
+pub struct SQLOperation {
+    pub selection: Vec<SelectItem>,  // 列选择
+    pub condition: Option<SqlExpr>,  // 行过滤条件
+    pub source: Vec<TableWithJoins>, // 数据源
+    pub order_by: Vec<OrderByExpr>,
+    pub offset: Option<Offset>,
+    pub limit: Option<SqlExpr>
 }
 
 // polars 的 DataFrame 操作
-struct DataFrameOperation {
-    selection: Vec<polaExpr>,    // 列选择
-    condition: Option<polaExpr>, // 行过滤条件
-    source: String,          // 数据源
-    order_by: Vec<(String, bool)>,
-    offset: Option<i64>,
-    limit: Option<usize>
+#[derive(Clone)]
+pub struct DataFrameOperation {
+    pub selection: Vec<polaExpr>,    // 列选择
+    pub condition: Option<polaExpr>, // 行过滤条件
+    pub source: String,          // 数据源
+    pub order_by: Vec<(String, bool)>,
+    pub offset: Option<i64>,
+    pub limit: Option<u32>
 }
 
 // 使用包装规避孤儿原则
@@ -32,8 +34,8 @@ struct SqlExprWrapper (SqlExpr);
 struct TableWithJoinsWrapper (Vec<TableWithJoins>);
 struct OrderByExprWrapper (OrderByExpr);
 struct OffsetWrapper (Offset);
-struct Operation(SqlBinaryOperator);
-struct Value(SqlValue);
+struct SqlBinaryOperatorWrapper(SqlBinaryOperator);
+struct SqlValueWrapper(SqlValue);
 
 // Statement -> SQLOperation
 impl TryFrom<Statement> for SQLOperation {
@@ -73,6 +75,7 @@ impl TryFrom<Statement> for SQLOperation {
     }
 }
 
+// SQLOperation -> DataFrameOperation
 impl TryFrom<SQLOperation> for DataFrameOperation {
     type Error = anyhow::Error;
     fn try_from(sqlop: SQLOperation) -> Result<Self, Self::Error> {
@@ -144,16 +147,15 @@ impl TryFrom<SqlExprWrapper> for polaExpr {
     type Error = anyhow::Error;
     fn try_from(expr: SqlExprWrapper) -> Result<Self, Self::Error> {
         match expr.0 {
-            SqlExpr::BinaryOp { left, op, right } => Ok(Expr::BinaryExpr {
+            SqlExpr::BinaryOp { left, op, right } => Ok(Self::BinaryExpr {
                 left: Box::new(SqlExprWrapper(*left.clone()).try_into()?),
-                op: Operation(op).try_into()?,
+                op: SqlBinaryOperatorWrapper(op).try_into()?,
                 right: Box::new(SqlExprWrapper(*right.clone()).try_into()?),
             }),
-            // SqlExpr::Wildcard => Ok(Self::Wildcard),
-            SqlExpr::IsNull(expr) => Ok(Self::IsNull(Box::new(SqlExprWrapper(*expr.clone()).try_into()?))),
+            SqlExpr::IsNull(expr) => Ok(Self::IsNull(Box::new(SqlExprWrapper(*expr.clone()).try_into()?))), // 递归
             SqlExpr::IsNotNull(expr) => Ok(Self::IsNotNull(Box::new(SqlExprWrapper(*expr.clone()).try_into()?))),
             SqlExpr::Identifier(id) => Ok(Self::Column(Arc::from(&*id.value))),
-            SqlExpr::Value(v) => Ok(Self::Literal(Value(v).try_into()?)),
+            SqlExpr::Value(v) => Ok(Self::Literal(SqlValueWrapper(v).try_into()?)),
             v => Err(anyhow!("expr {:#?} is not supported", v)),
         }
     }
@@ -211,19 +213,19 @@ impl From<OffsetWrapper> for i64 {
 }
 
 // limit
-impl From<SqlExprWrapper> for usize {
+impl From<SqlExprWrapper> for u32 {
     fn from(s: SqlExprWrapper) -> Self {
         match s.0 {
-            SqlExpr::Value(SqlValue::Number(v, _b)) => v.parse().unwrap_or(usize::MAX),
-            _ => usize::MAX,
+            SqlExpr::Value(SqlValue::Number(v, _b)) => v.parse().unwrap_or(u32::MAX),
+            _ => u32::MAX,
         }
     }
 }
 
-impl TryFrom<Operation> for Operator {
+impl TryFrom<SqlBinaryOperatorWrapper> for Operator {
     type Error = anyhow::Error;
 
-    fn try_from(op: Operation) -> Result<Self, Self::Error> {
+    fn try_from(op: SqlBinaryOperatorWrapper) -> Result<Self, Self::Error> {
         match op.0 {
             SqlBinaryOperator::Plus => Ok(Self::Plus),
             SqlBinaryOperator::Minus => Ok(Self::Minus),
@@ -243,14 +245,14 @@ impl TryFrom<Operation> for Operator {
     }
 }
 
-impl TryFrom<Value> for LiteralValue {
+impl TryFrom<SqlValueWrapper> for LiteralValue {
     type Error = anyhow::Error;
-    fn try_from(v: Value) -> Result<Self, Self::Error> {
+    fn try_from(v: SqlValueWrapper) -> Result<Self, Self::Error> {
         match v.0 {
             SqlValue::Number(v, _) => Ok(LiteralValue::Float64(v.parse().unwrap())),
             SqlValue::Boolean(v) => Ok(LiteralValue::Boolean(v)),
             SqlValue::Null => Ok(LiteralValue::Null),
-            v => Err(anyhow!("Value {} is not supported", v)),
+            v => Err(anyhow!("SqlValueWrapper {} is not supported", v)),
         }
     }
 }
@@ -276,7 +278,7 @@ mod tests {
     fn parse_sql_works() {
         let url = "http://abc.xyz/abc?a=1&b=2";
         let sql = format!(
-            "select a, b, c from {url} where a=1 order by c desc limit 5 offset 10"
+            "select a, b, c from {url} where a = 1 order by c desc limit 5 offset 10"
         );
         let statement = Parser::parse_sql(&URLDialect::default(), sql.as_ref()).unwrap()[0].clone();
         let sqlop: SQLOperation = statement.try_into().unwrap();
@@ -286,5 +288,11 @@ mod tests {
         assert_eq!(dfop.offset, Some(10));
         assert_eq!(dfop.order_by, vec![("c".into(), true)]);
         assert_eq!(dfop.selection, vec![col("a"), col("b"), col("c")]);
+        assert_eq!(dfop.condition, Some(polaExpr::BinaryExpr {
+                left: Box::new(polaExpr::Column(Arc::from("a"))),
+                op: Operator::Eq,
+                right: Box::new(polaExpr::Literal(LiteralValue::Float64(1.0))) 
+            })
+        );
     }
 }
